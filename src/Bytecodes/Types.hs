@@ -50,20 +50,14 @@ instance Serialize ClassFile where
     minorVersion <- uint2
     majorVersion <- uint2
     constantPoolCount <- uint2 
-    constantPool <- do
-      cp <- replicateM (fromIntegral $ constantPoolCount - 1) (get :: Get ConstantPoolInfo)
-      return $ fromList cp -- constant pool
+    constantPool <- getArrayOfSize (constantPoolCount - 1) -- constant pool
     accessFlags <- uint2 -- uint2
     thisClass <- uint2
     superClass <- uint2 
     interfacesCount <- uint2
-    interfaces <- do
-      is <- replicateM (fromIntegral interfacesCount) uint2
-      return $ fromList is -- interfaces
+    interfaces <- getArrayOfSize interfacesCount
     fieldsCount <- uint2
-    fields <- do
-      fs <- replicateM (fromIntegral fieldsCount) (get :: Get FieldInfo)
-      return $ fromList fs -- field_info
+    fields <- getArrayOfSize fieldsCount -- field_info
     methodsCount <- uint2
     methods <- getArrayOfSize methodsCount -- method_info
     attributesCount <- uint2
