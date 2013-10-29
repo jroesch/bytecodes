@@ -176,7 +176,36 @@ instance Serialize ConstantPoolInfo where
         return $ CInvokeDynamic bmai nati
       _  -> error $ "ConstantPoolInfo decoding unknown constant: " ++ (show tag)
 
-  put = undefined
+  put info = case info of
+    CClass i -> do
+      putWord8 7
+      putWord16be i
+    CFieldRef _ _ -> do
+      putWord8 9
+    CMethodRef _ _ -> do
+      putWord8 10
+    CInterfaceMethodRef _ _ -> do
+      putWord8 11
+    CString _ -> do
+      putWord8 8
+    CInteger _ -> do
+      putWord8 3
+    CFloat _  -> do
+      putWord8 4
+    CLong _ _ -> do
+      putWord8 5
+    CDouble _ _ -> do
+      putWord8 6
+    CNameAndType _ _ -> do
+      putWord8 12
+    CUtf8 _ _ -> do
+      putWord8 1
+    CMethodHandle _ _ -> do
+      putWord8 15
+    CMethodType _ -> do
+      putWord8 16
+    CInvokeDynamic _ _ -> do
+      putWord8 18
 
 data FieldInfo = FieldInfo UInt2 UInt2 UInt2 UInt2 (Array AttributeInfo) deriving (Show, Eq)
 
@@ -212,4 +241,5 @@ instance Serialize AttributeInfo where
     alen <- uint4
     info <- getArrayOfSize alen
     return $ AttributeInfo ani alen info
-  put = undefined
+
+  put = undefined 
