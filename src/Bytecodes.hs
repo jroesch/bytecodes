@@ -16,7 +16,7 @@ import qualified Data.Vector as V
 import Data.Char
 import Text.Printf
 import Debug.Trace
-import Bytecodes.Types
+import Bytecodes.Raw.Types
 import Data.Serialize
 
 blah f = do

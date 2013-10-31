@@ -1,239 +1,144 @@
-{-# LANGUAGE ExplicitForAll, ScopedTypeVariables #-}
+{-# LANGUAGE GADTs, EmptyDataDecls, OverloadedStrings, RankNTypes #-}
 module Bytecodes.Types where
 
-import Control.Monad
-import Data.Serialize
-import Data.Word
-import Data.Char
-import Text.Printf
+import Data.Text (Text)
+import Data.Bits
+import Data.Map (Map)
+import Data.Array ((!))
 import qualified Data.Array as A
+import Data.Maybe (fromMaybe, catMaybes)
+import qualified Data.Map as M
+import qualified Bytecodes.Raw.Types as Raw
+import qualified Data.ByteString as B
+import Control.Applicative ((<$>))
 
-type Array e = A.Array Int e
+data Version = Version Int Int deriving (Eq)
 
-type UInt1 = Word8
-type UInt2 = Word16
-type UInt4 = Word32
+instance Show Version where
+  show (Version major minor) = concat [show major, ".", show minor]
 
-data ClassFile = ClassFile { 
-  magic :: UInt4, 
-  minorVersion :: UInt2,
-  majorVersion :: UInt2,
-  constantPoolCount :: UInt2,
-  constantPool :: Array ConstantPoolInfo,
-  accessFlags :: UInt2,
-  thisClass :: UInt2,
-  superClass :: UInt2,
-  interfacesCount :: UInt2,
-  interfaces :: Array UInt2,
-  fieldsCount :: UInt2,
-  fields :: Array FieldInfo,
-  methodsCount :: UInt2,
-  methods :: Array MethodInfo,
-  attributesCount :: UInt2,
-  attributes :: Array AttributeInfo
+fromRClassFile :: Raw.ClassFile -> Maybe ClassFile
+fromRClassFile rf = do
+  this <- cfLookupClass rf $ fromIntegral $ Raw.thisClass rf
+  super <- cfLookupClass rf $ fromIntegral $ Raw.superClass rf
+  let  ifaces = A.elems $ Raw.interfaces rf
+  interfaces <- sequence $ map (\i -> IFace <$> (cfLookupClass rf $ fromIntegral i)) ifaces
+  return $ ClassFile {
+    version = cfVersion rf,
+    accessFlags = mkAccessFlags $ fromIntegral $ Raw.accessFlags rf,
+    this = this,
+    super = super,
+    interfaces = interfaces,
+    fields = [],
+    methods = []
+    -- rawClassFile = rf
+  }
+
+toRClassFile :: ClassFile -> Raw.ClassFile
+toRClassFile = undefined
+
+cfVersion :: Raw.ClassFile -> Version
+cfVersion rf = Version (fromIntegral $ Raw.majorVersion rf) (fromIntegral $ Raw.minorVersion rf)
+
+cfLookupClass :: Raw.ClassFile -> Int -> Maybe (Type Class)
+cfLookupClass rf i = case cp ! (i - 1) of
+                       Raw.Utf8 _ n -> Just $ Object n
+                       Raw.Class n  -> cfLookupClass rf $ fromIntegral n          
+                       _            -> Nothing
+    where cp = Raw.constantPool rf
+
+cfField :: Raw.FieldInfo -> Field
+cfField _ = undefined 
+
+data ClassFile = ClassFile {
+  -- constant pool
+  version :: Version,
+  accessFlags :: [AccessFlag],
+  this :: Type Class,
+  super :: Type Class,
+  interfaces :: [Interface],
+  fields :: [Field],
+  methods :: [Method]
+  --attributes :: Array AttributeInfo
+  --rawClassFile :: Raw.ClassFile
 } deriving (Show, Eq)
 
-uint4 = getWord32be
-uint2 = getWord16be
-uint1 = getWord8
+data AccessFlag = Public 
+                 | Final 
+                 | Super 
+                 | Interface 
+                 | Abstract
+                 | Synthetic
+                 | Annotation
+                 | Enum
+                 deriving (Show, Eq)
 
-fromList xs = A.listArray (0, length xs - 1) xs
+data Field = Field deriving (Show, Eq)
 
-getArrayOfSize :: forall e i. (Serialize e, Integral i) => i -> Get (Array e)
-getArrayOfSize i = do
-  rs <- replicateM (fromIntegral i) (get :: Get e)
-  return $ fromList rs
+accessFlagsMap :: Map Int AccessFlag
+accessFlagsMap = M.fromList [
+  (0x0001, Public), 
+  (0x0010, Final),
+  (0x0020, Super),
+  (0x0200, Interface),
+  (0x0400, Abstract),
+  (0x1000, Synthetic),
+  (0x2000, Annotation),
+  (0x4000, Enum)]
 
-instance Serialize ClassFile where
-  get = do
-    magic <- uint4
-    minorVersion <- uint2
-    majorVersion <- uint2
-    constantPoolCount <- uint2 
-    constantPool <- getArrayOfSize (constantPoolCount - 1) -- constant pool
-    accessFlags <- uint2 -- uint2
-    thisClass <- uint2
-    superClass <- uint2 
-    interfacesCount <- uint2
-    interfaces <- getArrayOfSize interfacesCount
-    fieldsCount <- uint2
-    fields <- getArrayOfSize fieldsCount -- field_info
-    methodsCount <- uint2
-    methods <- getArrayOfSize methodsCount -- method_info
-    attributesCount <- uint2
-    attributes <- getArrayOfSize attributesCount -- attribute_info
-    return $ (ClassFile
-      magic
-      minorVersion
-      majorVersion
-      constantPoolCount
-      constantPool
-      accessFlags
-      thisClass
-      superClass
-      interfacesCount
-      interfaces
-      fieldsCount
-      fields
-      methodsCount
-      methods
-      attributesCount
-      attributes)
+mkAccessFlags :: Int -> [AccessFlag]
+mkAccessFlags fs = 
+    let bytes = [0x000F .&. fs, 0x00F0 .&. fs, 0x0F00 .&. fs, 0xF000 .&. fs] in
+      let mflags = map (\x -> x `M.lookup` accessFlagsMap) bytes in
+        catMaybes mflags
 
-  put = undefined 
+-- Phantom Types for Type
+data Primitive
+data Class 
+data Array a
 
-data ConstantPoolInfo = 
-    CClass UInt2 -- nameIndex
-  | CFieldRef UInt2 UInt2 -- classIndex nameAndTypeIndex
-  | CMethodRef UInt2 UInt2 -- classIndex nameAndTypeIndex
-  | CInterfaceMethodRef UInt2 UInt2 -- classIndex nameAndTypeIndex
-  | CString UInt2 -- stringIndex
-  | CInteger UInt4 -- bytes
-  | CFloat UInt4 -- bytes
-  | CLong UInt4 UInt4 -- highBytes lowBytes
-  | CDouble UInt4 UInt4 -- highBytes lowBytes
-  | CNameAndType UInt2 UInt2 -- nameIndex descriptorIndex
-  | CUtf8 UInt2 (Array UInt1) -- length bytes
-  | CMethodHandle UInt1 UInt2 -- referenceKind referenceIndex
-  | CMethodType UInt2 -- descriptorIndex 
-  | CInvokeDynamic UInt2 UInt2 -- bootstrapMethodAttrIndex nameAndTypeIndex
-  deriving (Eq)
+data Interface = IFace (Type Class) deriving (Show, Eq)
+data Method = M deriving (Show, Eq)
 
-instance Show ConstantPoolInfo where
-  show (CClass ni)                 = "Class #" ++ show ni
-  show (CFieldRef ci nt)           = "Fieldref #" ++ (show ci) ++ "." ++ "#" ++ (show nt)
-  show (CMethodRef ci nt)          = "Methodref #" ++ (show ci) ++ "." ++ "#" ++ (show nt)
-  show (CInterfaceMethodRef ci nt) = undefined -- (toBytes ci) ++ (toBytes nt)
-  show (CString si)                = "String #" ++ show si
-  show (CInteger bs)               = "Integer " ++ show bs
-  show (CFloat bs)                 = "Float " ++ show bs 
-  show (CLong hi lo)               = "CLong " ++ show hi ++ show lo -- (toBytes hi) ++ (toBytes lo)
-  show (CDouble hi lo)             = "CDouble " ++ show hi ++ show lo -- (toBytes hi) ++ (toBytes lo)
-  show (CNameAndType ni di)        = printf "NameAndType #%d:%d" ni di
-  show (CUtf8 len bs)              = (++) "Utf8 " $ map (chr . fromIntegral) $ A.elems bs 
-  show (CMethodHandle rk ri)       = undefined -- rk : (toBytes ri)
-  show (CMethodType di)            = undefined -- toBytes di
-  show (CInvokeDynamic b nt)       = undefined -- (toBytes b) ++ (toBytes nt)
+data Type a where
+  Boolean :: Type Primitive
+  Char :: Type Primitive
+  Byte :: Type Primitive
+  Short :: Type Primitive 
+  Int :: Type Primitive
+  Float :: Type Primitive
+  Long :: Type Primitive
+  Double :: Type Primitive
+  Object :: B.ByteString -> Type Class
+  Array :: Type a -> Type (Array a)
 
-instance Serialize ConstantPoolInfo where
-  get = do
-    tag <- uint1 -- tag
-    case tag of  -- info
-      7 -> do
-        nameI <- uint2
-        return $ CClass nameI
-      9 -> do
-        classI <- uint2
-        nameTI <- uint2
-        return $ CFieldRef classI nameTI           
-      10 -> do
-        classI <- uint2
-        nameTI <- uint2
-        return $ CMethodRef classI nameTI         
-      11 -> do
-        classI <- uint2
-        nameTI <- uint2
-        return $ CInterfaceMethodRef classI nameTI    
-      8 -> do
-        idx <- uint2
-        return $ CString idx              
-      3 -> do
-        bytes <- uint4
-        return $ CInteger bytes      
-      4 -> do
-        bytes <- uint4
-        return $ CFloat bytes                 
-      5 -> do
-        hi <- uint4
-        lo <- uint4
-        return $ CLong hi lo            
-      6 -> do
-        hi <- uint4
-        lo <- uint4
-        return $ CDouble hi lo           
-      12 -> do
-        nameI <- uint2
-        descpI <- uint2
-        return $ CNameAndType nameI descpI       
-      1 -> do
-        len <- uint2
-        bytes <- replicateM (fromIntegral len) uint1
-        return $ CUtf8 len $ fromList bytes -- should just be text 
-      15 -> do
-        referenceKind <- uint1
-        referenceIndex <- uint2
-        return $ CMethodHandle referenceKind referenceIndex    
-      16 -> uint2 >>= return . CMethodType       
-      18 -> do
-        bmai <- uint2
-        nati <- uint2
-        return $ CInvokeDynamic bmai nati
-      _  -> error $ "ConstantPoolInfo decoding unknown constant: " ++ (show tag)
+instance Show (Type a) where
+  show Boolean    = "Z" 
+  show Char       = "C"
+  show Byte       = "B" 
+  show Short      = "S"
+  show Int        = "I"
+  show Float      = "F"
+  show Long       = "J"
+  show Double     = "D"
+  show (Object n) = "L" ++ show n ++ ";"
+  show (Array  t) = "[" ++ show t
 
-  put info = case info of
-    CClass i -> do
-      putWord8 7
-      putWord16be i
-    CFieldRef _ _ -> do
-      putWord8 9
-    CMethodRef _ _ -> do
-      putWord8 10
-    CInterfaceMethodRef _ _ -> do
-      putWord8 11
-    CString _ -> do
-      putWord8 8
-    CInteger _ -> do
-      putWord8 3
-    CFloat _  -> do
-      putWord8 4
-    CLong _ _ -> do
-      putWord8 5
-    CDouble _ _ -> do
-      putWord8 6
-    CNameAndType _ _ -> do
-      putWord8 12
-    CUtf8 _ _ -> do
-      putWord8 1
-    CMethodHandle _ _ -> do
-      putWord8 15
-    CMethodType _ -> do
-      putWord8 16
-    CInvokeDynamic _ _ -> do
-      putWord8 18
+instance Eq (Type a) where
+  Boolean    == Boolean    = True
+  Char       == Char       = True
+  Byte       == Byte       = True
+  Short      == Short      = True
+  Int        == Int        = True
+  Float      == Float      = True
+  Long       == Long       = True
+  Double     == Double     = True
+  (Object n) == (Object m) = n == m
+  (Array t)  == (Array u)  = t == u
+  _          == _          = False
 
-data FieldInfo = FieldInfo UInt2 UInt2 UInt2 UInt2 (Array AttributeInfo) deriving (Show, Eq)
+{- data MethodDecl = MethodDecl { 
+  returnType :: Type,
+  name :: String, 
+  params :: List[ -}
 
-instance Serialize FieldInfo where
-  get = do
-    accessFlags <- uint2
-    nameIndex <- uint2
-    dindex <- uint2
-    attrCount <- uint2
-    attrInfo <- getArrayOfSize attrCount
-    return $ FieldInfo accessFlags nameIndex dindex attrCount attrInfo
-
-  put = undefined
-
-data MethodInfo = MethodInfo UInt2 UInt2 UInt2 UInt2 (Array AttributeInfo) deriving (Show, Eq)
-
-instance Serialize MethodInfo where
-  get = do
-    accessFlags <- uint2
-    nameIndex <- uint2
-    dindex <- uint2
-    attrCount <- uint2
-    attrInfo <- (getArrayOfSize attrCount) :: Get (Array AttributeInfo)
-    return $ MethodInfo accessFlags nameIndex dindex attrCount attrInfo
-
-  put = undefined
-
-data AttributeInfo = AttributeInfo UInt2 UInt4 (Array UInt1) deriving (Show, Eq)
-
-instance Serialize AttributeInfo where
-  get = do
-    ani <- uint2
-    alen <- uint4
-    info <- getArrayOfSize alen
-    return $ AttributeInfo ani alen info
-
-  put = undefined 
