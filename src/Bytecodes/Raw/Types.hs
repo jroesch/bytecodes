@@ -1,4 +1,4 @@
-{-# LANGUAGE ExplicitForAll, ScopedTypeVariables #-}
+{-# LANGUAGE ExplicitForAll, ScopedTypeVariables, DeriveGeneric, DefaultSignatures #-}
 module Bytecodes.Raw.Types where
 
 import Control.Monad
@@ -6,6 +6,7 @@ import Data.Serialize
 import Data.Word
 import Data.Char
 import Text.Printf
+import GHC.Generics
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.Array as A
@@ -35,9 +36,15 @@ data ClassFile = ClassFile {
   attributes :: Array AttributeInfo
 } deriving (Show, Eq)
 
+
+-- alias for consistency 
 uint4 = getWord32be
 uint2 = getWord16be
 uint1 = getWord8
+
+puint4 = putWord32be
+puint2 = putWord16be
+puint1 = putWord8
 
 fromList xs = A.listArray (0, length xs - 1) xs
 
@@ -49,6 +56,8 @@ getArrayOfSize i = do
 instance Serialize ClassFile where
   get = do
     magic <- uint4
+    when (magic /= 0xCAFEBABE) $ 
+      error "Magic number fail!"
     minorVersion <- uint2
     majorVersion <- uint2
     constantPoolCount <- uint2 
@@ -82,7 +91,24 @@ instance Serialize ClassFile where
       attributesCount
       attributes)
 
-  put = undefined 
+  put cf = do
+    puint4 0xCAFEBABE
+    put $ minorVersion cf
+    put $ majorVersion cf
+    put $ constantPoolCount cf + 1
+    put $ constantPool cf
+    put $ accessFlags cf
+    put $ thisClass cf
+    put $ superClass cf
+    put $ (interfacesCount cf :: UInt2) -- interfacesCount cf
+    put $ interfaces cf
+    put $ (0 :: UInt2) -- fieldsCount cf
+    -- put $ fields cf    
+    put $ (0 :: UInt2) -- methodsCount cf
+    -- put $ methods cf -- <- getArrayOfSize methodsCount -- method_info
+    put $ (0 :: UInt2) -- attributesCount cf -- <- uint2
+    -- put $ attributes cf -- <- getArrayOfSize attributesCount -- attribute_info
+
 
 data ConstantPoolInfo = 
     Class UInt2 -- nameIndex
@@ -203,7 +229,7 @@ instance Serialize ConstantPoolInfo where
     InvokeDynamic _ _ -> do
       putWord8 18
 
-data FieldInfo = FieldInfo UInt2 UInt2 UInt2 UInt2 (Array AttributeInfo) deriving (Show, Eq)
+data FieldInfo = FieldInfo UInt2 UInt2 UInt2 UInt2 (Array AttributeInfo) deriving (Show, Eq, Generic)
 
 instance Serialize FieldInfo where
   get = do
@@ -214,9 +240,9 @@ instance Serialize FieldInfo where
     attrInfo <- getArrayOfSize attrCount
     return $ FieldInfo accessFlags nameIndex dindex attrCount attrInfo
 
-  put = undefined
+  {- put = undefined -}
 
-data MethodInfo = MethodInfo UInt2 UInt2 UInt2 UInt2 (Array AttributeInfo) deriving (Show, Eq)
+data MethodInfo = MethodInfo UInt2 UInt2 UInt2 UInt2 (Array AttributeInfo) deriving (Show, Eq, Generic)
 
 instance Serialize MethodInfo where
   get = do
@@ -227,9 +253,9 @@ instance Serialize MethodInfo where
     attrInfo <- (getArrayOfSize attrCount) :: Get (Array AttributeInfo)
     return $ MethodInfo accessFlags nameIndex dindex attrCount attrInfo
 
-  put = undefined
+ {- put = undefined -}
 
-data AttributeInfo = AttributeInfo UInt2 UInt4 (Array UInt1) deriving (Show, Eq)
+data AttributeInfo = AttributeInfo UInt2 UInt4 (Array UInt1) deriving (Show, Eq, Generic)
 
 instance Serialize AttributeInfo where
   get = do
@@ -238,4 +264,4 @@ instance Serialize AttributeInfo where
     info <- getArrayOfSize alen
     return $ AttributeInfo ani alen info
 
-  put = undefined 
+  {- put = undefined -}
